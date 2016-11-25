@@ -1,0 +1,54 @@
+import org.apache.log4j.Logger;
+import org.quartz.*;
+import org.quartz.ee.servlet.QuartzInitializerListener;
+import org.quartz.impl.StdSchedulerFactory;
+
+import javax.servlet.ServletContext;
+import javax.servlet.ServletContextEvent;
+import javax.servlet.annotation.WebListener;
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.Properties;
+
+
+/**
+ * Quartz Job Listener for Batch Job to schedule the Job
+ * 
+ * @author Pratibha
+ * @version 1.0
+ * @since May 16, 2016
+ * 
+ */
+
+@WebListener
+public class QuartzJobListener extends QuartzInitializerListener {
+	
+	private static final Logger LOGGER = Logger
+			.getLogger(QuartzJobListener.class);
+	
+	
+    @Override
+    public void contextInitialized(ServletContextEvent sce) {
+        super.contextInitialized(sce);
+        ServletContext ctx = sce.getServletContext();
+        StdSchedulerFactory factory = (StdSchedulerFactory) ctx.getAttribute(QUARTZ_FACTORY_KEY);
+        try {
+        	Properties prop = new Properties();
+            String filename = "Property file name with path";
+            FileInputStream is = new FileInputStream(new File(filename));
+            prop.load(is);
+        	final String CRON_EXPRESSION = prop.
+					  getProperty("JobCronExpression");
+            Scheduler scheduler = factory.getScheduler();
+            JobDetail jobDetail = JobBuilder.newJob(BatchJobRunner.class).build();
+            Trigger trigger = TriggerBuilder.newTrigger().withIdentity("simple").withSchedule(
+                    CronScheduleBuilder.cronSchedule(CRON_EXPRESSION)).startNow().build();
+            scheduler.scheduleJob(jobDetail, trigger);
+            scheduler.start();
+            LOGGER.info("*** Job scheduler has been started ***");
+        } catch (Exception e) {
+            ctx.log("There was an error scheduling the job.", e);
+        }
+    }
+
+}
