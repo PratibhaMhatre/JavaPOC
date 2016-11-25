@@ -1,0 +1,119 @@
+import com.kohls.context.SpringApplicationContext;
+import com.kohls.security.SecurityUtil;
+import com.kohls.util.DKCMassBarCodeUtils;
+import org.apache.log4j.Logger;
+import org.springframework.batch.core.Job;
+import org.springframework.batch.core.JobExecution;
+import org.springframework.batch.core.JobParametersBuilder;
+import org.springframework.batch.core.JobParametersInvalidException;
+import org.springframework.batch.core.explore.JobExplorer;
+import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.repository.JobExecutionAlreadyRunningException;
+import org.springframework.batch.core.repository.JobInstanceAlreadyCompleteException;
+import org.springframework.batch.core.repository.JobRestartException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Endpoint to launch jobs
+ *
+ * @author Pratibha
+ */
+@RestController
+public class JobLauncherController {
+
+    private static final Logger LOGGER = Logger.getLogger(JobLauncherController.class);
+    @Autowired
+    JobExplorer jobExplorer;
+
+    /**
+     * Endpoint method to launch job
+     *
+     * @return String
+     */
+    @RequestMapping(value = "/launchob", method = {RequestMethod.POST, RequestMethod.GET})
+    public String launchJob(@RequestParam(value = "startDate", required = false) Date startDate,
+                               @RequestParam(value = "endDate", required = false) Date endDate,@RequestHeader("Authorization") String auth,@RequestParam(value = "default", required = true) String defaultString) {
+        LOGGER.info("Launching  job by service ::");
+        LOGGER.info("Input parameters are:: Start Date = " + startDate + ", End Date = " + endDate+" ,Authorization = "+auth);
+        SimpleDateFormat sf = new SimpleDateFormat("MM/dd/yyyy HH:mm:ss");
+        String messageToBeVerified=startDate==null&&endDate==null?defaultString:sf.format(startDate) + sf.format(endDate)+defaultString;
+        Calendar currentDateTime = Calendar.getInstance();
+        int minsToExpire=10;
+        String jobStatus;
+        boolean isExpired=true;
+        SimpleDateFormat sf2 = new SimpleDateFormat("MMddyyyyHHmm");
+        while(minsToExpire>0) {
+            String currentTime = sf2.format(currentDateTime.getTime());
+            String messageToBeVerifiedWithTimestamp=new StringBuilder(messageToBeVerified).append(currentTime).toString();
+            if(!DKCMassBarCodeUtils.isObjectNull(auth)&& SecurityUtil.getSignature(messageToBeVerifiedWithTimestamp).equals(auth)){
+                isExpired=false;
+                break;
+            }
+            currentDateTime.add(Calendar.MINUTE,-1);
+            minsToExpire--;
+        }
+        if(isExpired){
+            jobStatus = "Unauthorized Access";
+            LOGGER.info(jobStatus);
+        }else if (startDate != null && endDate == null) {
+            jobStatus = "Invalid request. End date required !";
+            LOGGER.info(jobStatus);
+        } else if(startDate == null && endDate != null){
+            jobStatus = "Invalid request. Start date required!";
+            LOGGER.info(jobStatus);
+        } else if(startDate !=null && endDate.getTime() < startDate.getTime()) {
+            jobStatus = "Invalid request. End date should be after Start date!";
+            LOGGER.info(jobStatus);
+        } else if(endDate != null && (endDate.getTime() - startDate.getTime() < 86400000 || endDate.getTime() - startDate.getTime() >= 1296000000)){
+            jobStatus = "Invalid request. The date difference between Start date and End date should be greater than 1 and less than 15 days!";
+            LOGGER.info(jobStatus);
+        } else{
+            JobExecution jobExecution;
+            Job launchJob = (Job) SpringApplicationContext
+                    .getApplicationContext().getBean("processBatchJob");
+            JobLauncher jobLauncher = SpringApplicationContext.getApplicationContext().getBean(JobLauncher.class);
+
+            JobParametersBuilder jobParametersBuilder = new JobParametersBuilder();
+            jobParametersBuilder.addDate("startDate", startDate);
+            jobParametersBuilder.addDate("endDate", endDate);
+            jobParametersBuilder.addLong("time", System.currentTimeMillis());
+            long beforeJobStart = System.nanoTime();
+            try {
+                Set<JobExecution> jobExecutions = jobExplorer.findRunningJobExecutions("processatchJob");
+                LOGGER.info("job execution size is : " + jobExecutions.size());
+                if (jobExecutions.size() == 0) {
+                    jobExecution = jobLauncher.run(launchJob, jobParametersBuilder.toJobParameters());
+                    jobStatus = "Job " + jobExecution.getExitStatus().getExitCode();
+                    LOGGER.info("Job is ::" + jobExecution.getExitStatus().getExitCode());
+
+                    LOGGER.info("************************processBatchJob TOTAL TIME TAKEN************************************");
+                    long differenceTotal = System.nanoTime() - beforeobStart;
+                    LOGGER.info("Time in HH:MM:SS " + String.format("%d:%d:%d", TimeUnit.NANOSECONDS.toHours(differenceTotal),
+                            TimeUnit.NANOSECONDS.toMinutes(differenceTotal) % TimeUnit.HOURS.toMinutes(1),
+                            TimeUnit.NANOSECONDS.toSeconds(differenceTotal) % TimeUnit.MINUTES.toSeconds(1)));
+                    LOGGER.info(" Job Time in Nanoseconds " + differenceTotal);
+                    LOGGER.info("**********************************************************************************************");
+
+                } else {
+                    jobStatus = "Job Already Running";
+                    LOGGER.info(" job is Already Running... ");
+                }
+            } catch (JobExecutionAlreadyRunningException | JobRestartException | JobInstanceAlreadyCompleteException | JobParametersInvalidException e) {
+                jobStatus = "Exception occurred in job";
+                LOGGER.error("Exception in JobLauncherController ::", e);
+            }
+        }
+        return jobStatus;
+    }
+}
